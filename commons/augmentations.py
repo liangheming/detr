@@ -519,6 +519,7 @@ class MixUp(RandTransForm):
                                   append_labels[:, 1:],
                                   append_labels[:, 0],
                                   weights=np.ones_like(append_labels[:, 0]))
+        box_info = self.color_gitter(box_info)
         append_box_info = self.color_gitter(append_box_info)
         h1, w1 = box_info.img.shape[:2]
         h2, w2 = append_box_info.img.shape[:2]

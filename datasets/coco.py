@@ -234,3 +234,4 @@ if __name__ == '__main__':
     dataloader = DataLoader(dataset=dataset, batch_size=16, shuffle=True, num_workers=4, collate_fn=dataset.collate_fn)
     for input_tensor, path in dataloader:
         print(input_tensor.tensors.shape)
+        print(len(input_tensor.boxes))

@@ -11,7 +11,7 @@ class TensorList(object):
         self.labels = None
         self.boxes = None
         self.weights = None
-        self.mask = None
+        self.masks = None
         self.extras = dict()
 
     def set_tensors(self, img_list):
@@ -24,7 +24,7 @@ class TensorList(object):
         masks = list()
         for item in mask_list:
             masks.append(torch.from_numpy(item).bool())
-        self.mask = torch.stack(masks, dim=0)
+        self.masks = torch.stack(masks, dim=0)
 
     def set_labels(self, label_list):
         labels = list()
@@ -51,8 +51,8 @@ class TensorList(object):
         self.extras[name] = torch.stack(extras, dim=0)
 
     def to(self, device):
-        self.tensors.to(device)
-        self.mask.to(device)
+        self.tensors = self.tensors.to(device)
+        self.masks = self.masks.to(device)
         if self.boxes is not None:
             self.boxes = [item.to(device) for item in self.boxes]
         if self.labels is not None:
