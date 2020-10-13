@@ -1,7 +1,8 @@
 import math
+import torch
+import cv2 as cv
 import numpy as np
 from commons.augmentations import BoxInfo
-import cv2 as cv
 
 
 class TensorList(object):
@@ -10,23 +11,54 @@ class TensorList(object):
         self.labels = None
         self.boxes = None
         self.weights = None
-        self.shapes = None
-
-    @staticmethod
-    def build_tensor_list(img_list, label_list, box_list, weight_list):
-        pass
+        self.mask = None
+        self.extras = dict()
 
     def set_tensors(self, img_list):
-        pass
+        tensors = list()
+        for item in img_list:
+            tensors.append(torch.from_numpy(np.ascontiguousarray(item.transpose(2, 0, 1))).float())
+        self.tensors = torch.stack(tensors, dim=0)
+
+    def set_mask(self, mask_list):
+        masks = list()
+        for item in mask_list:
+            masks.append(torch.from_numpy(item).bool())
+        self.mask = torch.stack(masks, dim=0)
 
     def set_labels(self, label_list):
-        pass
+        labels = list()
+        for item in label_list:
+            labels.append(torch.from_numpy(item).float())
+        self.labels = labels
 
     def set_boxes(self, box_list):
-        pass
+        boxes = list()
+        for item in box_list:
+            boxes.append(torch.from_numpy(item).float())
+        self.boxes = boxes
 
     def set_weights(self, weight_list):
-        pass
+        weights = list()
+        for item in weight_list:
+            weights.append(torch.from_numpy(item).float())
+        self.weights = weights
+
+    def set_extra(self, name, extra_list):
+        extras = list()
+        for item in extra_list:
+            extras.append(torch.from_numpy(item).float())
+        self.extras[name] = torch.stack(extras, dim=0)
+
+    def to(self, device):
+        self.tensors.to(device)
+        self.mask.to(device)
+        if self.boxes is not None:
+            self.boxes = [item.to(device) for item in self.boxes]
+        if self.labels is not None:
+            self.labels = [item.to(device) for item in self.labels]
+        if self.weights is not None:
+            self.weights = [item.to(device) for item in self.weights]
 
 
 class BatchPadding(object):
@@ -64,12 +96,28 @@ class BatchPadding(object):
                                         right,
                                         cv.BORDER_CONSTANT,
                                         value=BoxInfo.EMPTY_INDEX)
-            box_info.img = ret_img
+
             if box_info.box is not None and len(box_info.box):
                 box_info.box[:, [0, 2]] = box_info.box[:, [0, 2]] + left
                 box_info.box[:, [1, 3]] = box_info.box[:, [1, 3]] + top
-            from datasets.coco import colors, coco_names
-            ret_img = box_info.draw_box(colors, coco_names)
-            import uuid
-            cv.imwrite("{:s}.jpg".format(str(uuid.uuid4()).replace('-', "")), ret_img)
 
+            # box_info.img = ret_img
+            # from datasets.coco import colors, coco_names
+            # ret_img = box_info.draw_box(colors, coco_names)
+            # import uuid
+            # cv.imwrite("{:s}.jpg".format(str(uuid.uuid4()).replace('-', "")), ret_img)
+            box_info.mask = ret_img[..., 0] != BoxInfo.EMPTY_INDEX
+            zero_mask = ret_img == BoxInfo.EMPTY_INDEX
+            ret_img = ((ret_img[..., ::-1] / 255.0) - np.array(self.rgb_mean)) / np.array(self.rgb_std)
+            ret_img[zero_mask] = 0.
+            box_info.img = ret_img
+            box_info.extra = np.array([left, top, w, h])
+
+        tensor_list = TensorList()
+        tensor_list.set_tensors([item.img for item in box_infos])
+        tensor_list.set_boxes([item.box for item in box_infos])
+        tensor_list.set_labels([item.label for item in box_infos])
+        tensor_list.set_weights([item.weights for item in box_infos])
+        tensor_list.set_mask([item.mask for item in box_infos])
+        tensor_list.set_extra('padding_shapes', [item.extra for item in box_infos])
+        return tensor_list

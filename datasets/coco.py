@@ -55,7 +55,7 @@ cv.setNumThreads(0)
 class COCODataSets(Dataset):
     def __init__(self, img_root, annotation_path,
                  min_thresh=640,
-                 max_thresh=1024,
+                 max_thresh=896,
                  augments=True,
                  use_crowd=True,
                  debug=False,
@@ -168,48 +168,58 @@ class COCODataSets(Dataset):
         :param batch:
         :return: images shape[bs,3,h,w] targets[bs,7] (bs_idx,weights,label_idx,x1,y1,x2,y2)
         """
-        box_infos, path = zip(*batch)  # transposed
-        self.batch_transform(box_infos)
-        return path
+        box_infos, paths = zip(*batch)  # transposed
+        tensor_list = self.batch_transform(box_infos)
+        return tensor_list, paths
 
     def set_transform(self):
-        color_jitter = OneOf(
-            transforms=[Identity(),
-                        RandNoise(),
-                        RandBlur(),
-                        HSV(hgain=self.aug_cfg['hsv_h'], sgain=self.aug_cfg['hsv_s'], vgain=self.aug_cfg['hsv_v'])]
-        )
-        mosaic = MosaicWrapper(min_thresh=self.min_thresh,
-                               max_thresh=self.max_thresh,
-                               candidate_img_paths=self.img_paths,
-                               candidate_labels=self.labels,
-                               color_gitter=color_jitter,
-                               rand_center=True)
-        mix_up = MixUpWrapper(candidate_img_paths=self.img_paths,
-                              candidate_labels=self.labels,
-                              color_gitter=color_jitter,
-                              beta=self.aug_cfg['beta'])
-        basic = Compose(transforms=[
-            color_jitter,
-            ScaleMinMax(min_thresh=self.min_thresh, max_thresh=self.max_thresh, rand_scale=True),
-            RandPerspective(target_size=None,
-                            degree=self.aug_cfg['degree'],
-                            shear=self.aug_cfg['shear'],
-                            translate=self.aug_cfg['translate'])
-        ])
+        if self.augments:
+            color_jitter = OneOf(
+                transforms=[Identity(),
+                            RandNoise(),
+                            RandBlur(),
+                            HSV(hgain=self.aug_cfg['hsv_h'], sgain=self.aug_cfg['hsv_s'], vgain=self.aug_cfg['hsv_v'])]
+            )
+            mosaic = MosaicWrapper(min_thresh=self.min_thresh,
+                                   max_thresh=self.max_thresh,
+                                   candidate_img_paths=self.img_paths,
+                                   candidate_labels=self.labels,
+                                   color_gitter=color_jitter,
+                                   rand_center=True)
+            mix_up = MixUpWrapper(candidate_img_paths=self.img_paths,
+                                  candidate_labels=self.labels,
+                                  color_gitter=Compose(
+                                      transforms=[
+                                          color_jitter,
+                                          ScaleMinMax(min_thresh=self.min_thresh,
+                                                      max_thresh=self.max_thresh,
+                                                      rand_scale=True)
+                                      ]
+                                  ),
+                                  beta=self.aug_cfg['beta'])
+            basic = Compose(transforms=[
+                color_jitter,
+                ScaleMinMax(min_thresh=self.min_thresh, max_thresh=self.max_thresh, rand_scale=True),
+                RandPerspective(target_size=None,
+                                degree=self.aug_cfg['degree'],
+                                shear=self.aug_cfg['shear'],
+                                translate=self.aug_cfg['translate'])
+            ])
 
-        self.transform = Compose(
-            transforms=[
-                OneOf(
-                    transforms=[
-                        (0.2, basic),
-                        (0.8, mosaic),
-                        (0.0, mix_up)
-                    ]
-                ),
-                LRFlip(p=0.5)
-            ]
-        )
+            self.transform = Compose(
+                transforms=[
+                    OneOf(
+                        transforms=[
+                            (0.2, basic),
+                            (0.5, mosaic),
+                            (0.3, mix_up)
+                        ]
+                    ),
+                    LRFlip(p=0.5)
+                ]
+            )
+        else:
+            self.transform = ScaleMinMax(min_thresh=self.min_thresh, max_thresh=self.max_thresh)
 
 
 if __name__ == '__main__':
@@ -222,5 +232,5 @@ if __name__ == '__main__':
                            debug=60
                            )
     dataloader = DataLoader(dataset=dataset, batch_size=16, shuffle=True, num_workers=4, collate_fn=dataset.collate_fn)
-    for path in dataloader:
-        print(path)
+    for input_tensor, path in dataloader:
+        print(input_tensor.tensors.shape)
