@@ -32,11 +32,16 @@ class BoxInfo(object):
         ret_img = ret_img.astype(np.uint8)
         if not len(self.box):
             return ret_img
-        for label_idx, (x1, y1, x2, y2) in zip(self.label, self.box):
+        for label_idx, weight, (x1, y1, x2, y2) in zip(self.label, self.weights, self.box):
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             cv.rectangle(ret_img, (x1, y1), (x2, y2), color=colors[int(label_idx)], thickness=2)
             cv.putText(ret_img, "{:s}".format(names[int(label_idx)]),
                        (x1, y1 + 5),
+                       cv.FONT_HERSHEY_SIMPLEX,
+                       0.5,
+                       colors[int(label_idx)], 2)
+            cv.putText(ret_img, "{:.2f}".format(weight),
+                       (x1, y1 + 15),
                        cv.FONT_HERSHEY_SIMPLEX,
                        0.5,
                        colors[int(label_idx)], 2)
@@ -397,6 +402,14 @@ class Mosaic(RandTransForm):
                  color_gitter=None,
                  target_size=640,
                  rand_center=True, **kwargs):
+        """
+        :param candidate_img_paths:list(img_paths)
+        :param candidate_labels: list(label) (label_num,5) [label_idx,x1,y1,x2,y2]
+        :param color_gitter:
+        :param target_size:
+        :param rand_center:
+        :param kwargs:
+        """
         kwargs['p'] = 1.0
         super(Mosaic, self).__init__(**kwargs)
         self.candidate_img_paths = candidate_img_paths
@@ -406,7 +419,7 @@ class Mosaic(RandTransForm):
         self.color_gitter = color_gitter
         self.target_size = target_size
         self.rand_center = rand_center
-        self.affine = RandPerspective(target_size=(target_size, target_size), translate=0.1)
+        self.affine = RandPerspective(target_size=(target_size, target_size), translate=0.1, scale=(0.8, 1.0))
         self.scale_max = ScaleMax(max_thresh=target_size, pad_to_square=False)
 
     def aug(self, box_info: BoxInfo) -> BoxInfo:
@@ -423,7 +436,7 @@ class Mosaic(RandTransForm):
                 box_info_i = box_info
             else:
                 img = cv.imread(self.candidate_img_paths[index])
-                label_info = self.candidate_labels[index]
+                label_info = self.candidate_labels[index].copy()
                 box_info_i = BoxInfo(img, label_info[:, 1:], label_info[:, 0], weights=np.ones_like(label_info[:, 0]))
             box_info_i = self.color_gitter(box_info_i)
             box_info_i = self.scale_max(box_info_i)
@@ -468,3 +481,98 @@ class Mosaic(RandTransForm):
         box_info.label = box_info.label[valid_index]
         box_info.weights = box_info.weights[valid_index]
         return self.affine(box_info)
+
+
+class MosaicWrapper(Mosaic):
+    def __init__(self, min_thresh=640, max_thresh=1024, **kwargs):
+        super(MosaicWrapper, self).__init__(**kwargs)
+        self.min_thresh = min_thresh
+        self.max_thresh = max_thresh
+
+    def aug(self, box_info: BoxInfo) -> BoxInfo:
+        rand_size = int(np.random.uniform(self.min_thresh, self.max_thresh))
+        self.target_size = rand_size
+        self.affine.reset(target_size=(rand_size, rand_size))
+        self.scale_max.reset(max_thresh=rand_size)
+        return super(MosaicWrapper, self).aug(box_info)
+
+
+class MixUp(RandTransForm):
+    def __init__(self, candidate_img_paths,
+                 candidate_labels,
+                 color_gitter=None,
+                 mix_ratio=0.5, **kwargs):
+        kwargs['p'] = 1.0
+        super(MixUp, self).__init__(**kwargs)
+        self.candidate_img_paths = candidate_img_paths
+        self.candidate_labels = candidate_labels
+        if color_gitter is None:
+            color_gitter = Identity()
+        self.color_gitter = color_gitter
+        self.mix_ratio = mix_ratio
+
+    def aug(self, box_info: BoxInfo) -> BoxInfo:
+        index = random.randint(0, len(self.candidate_labels) - 1)
+        append_img = cv.imread(self.candidate_img_paths[index])
+        append_labels = self.candidate_labels[index].copy()
+        append_box_info = BoxInfo(append_img,
+                                  append_labels[:, 1:],
+                                  append_labels[:, 0],
+                                  weights=np.ones_like(append_labels[:, 0]))
+        append_box_info = self.color_gitter(append_box_info)
+        h1, w1 = box_info.img.shape[:2]
+        h2, w2 = append_box_info.img.shape[:2]
+        temp_img = np.ones(shape=(max(h1, h2), max(w1, w2), 3), dtype=np.float32) * box_info.EMPTY_INDEX
+        inner_w, inner_h = min(w1, w2), min(h1, h2)
+        temp_img[0:h1, 0:w1, :] = self.mix_ratio * box_info.img
+        temp_img[0:h2, 0:w2, :] = (1 - self.mix_ratio) * append_box_info.img
+        temp_img[0:inner_h, 0:inner_w, :] = self.mix_ratio * box_info.img[0:inner_h, 0:inner_w, :] + (
+                1 - self.mix_ratio) * append_box_info.img[0:inner_h, 0:inner_w, :]
+        box_info.img = temp_img
+        if box_info.box is not None and len(box_info.box):
+            box_info.box = np.concatenate([box_info.box, append_box_info.box], axis=0)
+            box_info.label = np.concatenate([box_info.label, append_box_info.label], axis=0)
+            box_info.weights = np.concatenate([box_info.weights * self.mix_ratio,
+                                               append_box_info.weights * (1 - self.mix_ratio)], axis=0)
+        return box_info
+
+
+class MixUpWrapper(MixUp):
+    def __init__(self, beta=(8, 8), **kwargs):
+        super(MixUpWrapper, self).__init__(**kwargs)
+        self.beta = beta
+
+    def aug(self, box_info: BoxInfo) -> BoxInfo:
+        mix_ratio = np.random.beta(self.beta[0], self.beta[1])
+        self.mix_ratio = mix_ratio
+        return super(MixUpWrapper, self).aug(box_info)
+
+
+class OneOf(RandTransForm):
+    def __init__(self, transforms, **kwargs):
+        kwargs['p'] = 1.0
+        super(OneOf, self).__init__(**kwargs)
+        if isinstance(transforms[0], RandTransForm):
+            prob = float(1 / len(transforms))
+            transforms = [(prob, transform) for transform in transforms]
+        probs, transforms = zip(*transforms)
+        probs, transforms = list(probs), list(transforms)
+        self.probs = probs
+        self.transforms = transforms
+
+    def aug(self, box_info: BoxInfo) -> BoxInfo:
+        index = np.random.choice(a=range(len(self.probs)), p=self.probs)
+        box_info = self.transforms[index](box_info)
+        return box_info
+
+
+class Compose(RandTransForm):
+    def __init__(self, transforms, **kwargs):
+        kwargs['p'] = 1.0
+        super(Compose, self).__init__(**kwargs)
+        self.transforms = transforms
+
+    def aug(self, box_info: BoxInfo) -> BoxInfo:
+        for transform in self.transforms:
+            box_info = transform(box_info)
+        return box_info

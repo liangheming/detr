@@ -2,6 +2,7 @@ import os
 import torch
 import cv2 as cv
 import numpy as np
+from datasets._utils import BatchPadding
 from torch.utils.data.dataset import Dataset
 from pycocotools.coco import COCO
 from commons.augmentations import *
@@ -39,12 +40,10 @@ default_aug_cfg = {
     'hsv_h': 0.014,
     'hsv_s': 0.68,
     'hsv_v': 0.36,
-    'degree': 5,
+    'degree': (-5, 5),
     'translate': 0.1,
-    'scale': (0.8, 1.2),
     'shear': 0.0,
     'beta': (8, 8),
-    'pad_val': (103, 116, 123),
 }
 
 # rgb_mean = [0.485, 0.456, 0.406]
@@ -105,6 +104,8 @@ class COCODataSets(Dataset):
             self.shapes = self.shapes[:debug]
             self.labels = self.labels[:debug]
         self.transform = None
+        self.set_transform()
+        self.batch_transform = BatchPadding(center_padding=True)
 
     def __load_data(self):
         index = 0
@@ -153,24 +154,62 @@ class COCODataSets(Dataset):
         img = cv.imread(img_path)
         label = label.copy()
         box_info = BoxInfo(img, label[:, 1:], label[:, 0], weights=np.ones_like(label[:, 0]))
-        box_info = Mosaic(candidate_img_paths=self.img_paths, candidate_labels=self.labels.copy())(
-            box_info)
-        ret_img = box_info.draw_box(colors, coco_names)
-        import uuid
-        cv.imwrite("{:d}_{:s}.jpg".format(item, str(uuid.uuid4()).replace('-', "")), ret_img)
-        return img, label, img_path
+        box_info = self.transform(box_info)
+        # ret_img = box_info.draw_box(colors, coco_names)
+        # import uuid
+        # cv.imwrite("{:d}_{:s}.jpg".format(item, str(uuid.uuid4()).replace('-', "")), ret_img)
+        return box_info, img_path
 
     def __len__(self):
         return len(self.img_paths)
 
-    # def collate_fn(self, batch):
-    #     """
-    #     :param batch:
-    #     :return: images shape[bs,3,h,w] targets[bs,7] (bs_idx,weights,label_idx,x1,y1,x2,y2)
-    #     """
-    #     imgs, labels, path = zip(*batch)  # transposed
-    #     imgs, _, labels = self.batch_transform(imgs, labels)
-    #     return torch.from_numpy(imgs).permute(0, 3, 1, 2).contiguous().float(), torch.from_numpy(labels).float(), path
+    def collate_fn(self, batch):
+        """
+        :param batch:
+        :return: images shape[bs,3,h,w] targets[bs,7] (bs_idx,weights,label_idx,x1,y1,x2,y2)
+        """
+        box_infos, path = zip(*batch)  # transposed
+        self.batch_transform(box_infos)
+        return path
+
+    def set_transform(self):
+        color_jitter = OneOf(
+            transforms=[Identity(),
+                        RandNoise(),
+                        RandBlur(),
+                        HSV(hgain=self.aug_cfg['hsv_h'], sgain=self.aug_cfg['hsv_s'], vgain=self.aug_cfg['hsv_v'])]
+        )
+        mosaic = MosaicWrapper(min_thresh=self.min_thresh,
+                               max_thresh=self.max_thresh,
+                               candidate_img_paths=self.img_paths,
+                               candidate_labels=self.labels,
+                               color_gitter=color_jitter,
+                               rand_center=True)
+        mix_up = MixUpWrapper(candidate_img_paths=self.img_paths,
+                              candidate_labels=self.labels,
+                              color_gitter=color_jitter,
+                              beta=self.aug_cfg['beta'])
+        basic = Compose(transforms=[
+            color_jitter,
+            ScaleMinMax(min_thresh=self.min_thresh, max_thresh=self.max_thresh, rand_scale=True),
+            RandPerspective(target_size=None,
+                            degree=self.aug_cfg['degree'],
+                            shear=self.aug_cfg['shear'],
+                            translate=self.aug_cfg['translate'])
+        ])
+
+        self.transform = Compose(
+            transforms=[
+                OneOf(
+                    transforms=[
+                        (0.2, basic),
+                        (0.8, mosaic),
+                        (0.0, mix_up)
+                    ]
+                ),
+                LRFlip(p=0.5)
+            ]
+        )
 
 
 if __name__ == '__main__':
@@ -178,13 +217,10 @@ if __name__ == '__main__':
 
     dataset = COCODataSets(img_root="/home/huffman/data/val2017",
                            annotation_path="/home/huffman/data/annotations/instances_val2017.json",
-                           use_crowd=True,
+                           use_crowd=False,
                            augments=True,
                            debug=60
                            )
-    # dataloader = DataLoader(dataset=dataset, batch_size=16, shuffle=True, num_workers=4, collate_fn=dataset.collate_fn)
-    # for img_tensor, image_shapes, target_tensor, _ in dataloader:
-    #     print(image_shapes)
-    #     print(img_tensor.shape, target_tensor.shape)
-    for data in dataset:
-        print("i")
+    dataloader = DataLoader(dataset=dataset, batch_size=16, shuffle=True, num_workers=4, collate_fn=dataset.collate_fn)
+    for path in dataloader:
+        print(path)
