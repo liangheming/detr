@@ -153,7 +153,8 @@ class COCODataSets(Dataset):
         img = cv.imread(img_path)
         label = label.copy()
         box_info = BoxInfo(img, label[:, 1:], label[:, 0], weights=np.ones_like(label[:, 0]))
-        box_info = RandPerspective(p=1.0)(box_info)
+        box_info = Mosaic(candidate_img_paths=self.img_paths, candidate_labels=self.labels.copy())(
+            box_info)
         ret_img = box_info.draw_box(colors, coco_names)
         import uuid
         cv.imwrite("{:d}_{:s}.jpg".format(item, str(uuid.uuid4()).replace('-', "")), ret_img)
@@ -186,4 +187,4 @@ if __name__ == '__main__':
     #     print(image_shapes)
     #     print(img_tensor.shape, target_tensor.shape)
     for data in dataset:
-        print()
+        print("i")

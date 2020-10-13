@@ -3,6 +3,8 @@ import random
 import cv2 as cv
 import numpy as np
 
+cv.setNumThreads(0)
+
 
 class BoxInfo(object):
     EMPTY_INDEX = -1
@@ -21,9 +23,10 @@ class BoxInfo(object):
         self.weights = weights
 
     def valid_box_info(self):
-        return self.img is not None and self.label is not None
+        return self.img is not None
 
     def draw_box(self, colors, names):
+        assert self.img is not None and self.box is not None and self.label is not None
         ret_img = self.img.copy()
         ret_img[ret_img == self.EMPTY_INDEX] = 0
         ret_img = ret_img.astype(np.uint8)
@@ -33,7 +36,7 @@ class BoxInfo(object):
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             cv.rectangle(ret_img, (x1, y1), (x2, y2), color=colors[int(label_idx)], thickness=2)
             cv.putText(ret_img, "{:s}".format(names[int(label_idx)]),
-                       (x1, y1),
+                       (x1, y1 + 5),
                        cv.FONT_HERSHEY_SIMPLEX,
                        0.5,
                        colors[int(label_idx)], 2)
@@ -53,6 +56,12 @@ class RandTransForm(object):
         if aug_p <= self.p:
             box_info = self.aug(box_info)
         return box_info
+
+    def reset(self, **settings):
+        p = settings.get('p', None)
+        if p is not None:
+            self.p = p
+        return self
 
 
 class RandNoise(RandTransForm):
@@ -148,17 +157,22 @@ class Identity(RandTransForm):
 
 
 class ScaleMinMax(RandTransForm):
-    def __init__(self, min_thresh=640, max_thresh=1024, **kwargs):
+    def __init__(self, min_thresh=640, max_thresh=1024, rand_scale=False, **kwargs):
         kwargs['p'] = 1.0
         super(ScaleMinMax, self).__init__(**kwargs)
         assert min_thresh <= max_thresh
         self.min_thresh = min_thresh
         self.max_thresh = max_thresh
+        self.rand_scale = rand_scale
 
     def scale_img(self, img: np.ndarray):
         h, w = img.shape[:2]
         min_side, max_side = min(h, w), max(h, w)
-        r = min(self.min_thresh / min_side, self.max_thresh / max_side)
+        if not self.rand_scale:
+            r = min(self.min_thresh / min_side, self.max_thresh / max_side)
+        else:
+            r_l, r_r = self.min_thresh / min_side, self.max_thresh / max_side
+            r = np.random.uniform(r_l, r_r) if r_l < r_r else r_r
         if r != 1:
             img = cv.resize(img, (int(round(w * r)), int(round(h * r))), interpolation=cv.INTER_LINEAR)
         return img, r
@@ -166,7 +180,7 @@ class ScaleMinMax(RandTransForm):
     def aug(self, box_info: BoxInfo) -> BoxInfo:
         img, ratio = self.scale_img(box_info.img)
         box_info.img = img
-        if len(box_info.box):
+        if box_info.box is not None and len(box_info.box):
             box_info.box = box_info.box * ratio
         return box_info
 
@@ -206,11 +220,18 @@ class ScaleMax(RandTransForm):
     def aug(self, box_info: BoxInfo) -> BoxInfo:
         img, r, (left, top) = self.make_border(box_info.img, box_info.EMPTY_INDEX)
         box_info.img = img
-        if len(box_info.box):
+        if box_info.box is not None and len(box_info.box):
             box_info.box = box_info.box * r
             box_info.box[:, [0, 2]] = box_info.box[:, [0, 2]] + left
             box_info.box[:, [1, 3]] = box_info.box[:, [1, 3]] + top
         return box_info
+
+    def reset(self, **settings):
+        super(ScaleMax, self).reset(**settings)
+        max_thresh = settings.get('max_thresh', None)
+        if max_thresh is not None:
+            self.max_thresh = max_thresh
+        return self
 
 
 class LRFlip(RandTransForm):
@@ -229,7 +250,7 @@ class LRFlip(RandTransForm):
     def aug(self, box_info: BoxInfo) -> BoxInfo:
         _, w = box_info.img.shape[:2]
         box_info.img = self.img_aug(box_info.img)
-        if len(box_info.box):
+        if box_info.box is not None and len(box_info.box):
             box_info.box[:, [2, 0]] = w - box_info.box[:, [0, 2]]
         return box_info
 
@@ -250,18 +271,19 @@ class UDFlip(RandTransForm):
     def aug(self, box_info: BoxInfo) -> BoxInfo:
         h, _ = box_info.img.shape[:2]
         box_info.img = self.img_aug(box_info.img)
-        if len(box_info.box):
+        if box_info.box is not None and len(box_info.box):
             box_info.box[:, [3, 1]] = h - box_info.box[:, [1, 3]]
         return box_info
 
 
 class RandPerspective(RandTransForm):
     def __init__(self, target_size=(640, 640),
-                 degree=(-10, 10),
-                 translate=0.1,
-                 scale=(0.5, 1.5),
-                 shear=5,
+                 degree=(0, 0),
+                 translate=0,
+                 scale=(1.0, 1.0),
+                 shear=0,
                  perspective=0.0, **kwargs):
+        kwargs['p'] = 1.0
         super(RandPerspective, self).__init__(**kwargs)
         assert isinstance(target_size, tuple) or target_size is None
         assert isinstance(degree, tuple)
@@ -272,6 +294,31 @@ class RandPerspective(RandTransForm):
         self.scale = scale
         self.shear = shear
         self.perspective = perspective
+
+    def reset(self, **settings):
+        super(RandPerspective, self).reset(**settings)
+        target_size = settings.get('target_size', None)
+        degree = settings.get('degree', None)
+        translate = settings.get('translate', None)
+        scale = settings.get('scale', None)
+        shear = settings.get('shear', None)
+        perspective = settings.get('perspective', None)
+        if target_size is not None:
+            assert isinstance(target_size, tuple)
+            self.target_size = target_size
+        if degree is not None:
+            assert isinstance(degree, tuple)
+            self.degree = degree
+        if translate is not None:
+            self.translate = translate
+        if scale is not None:
+            assert isinstance(scale, tuple)
+            self.scale = scale
+        if shear is not None:
+            self.shear = shear
+        if perspective is not None:
+            self.perspective = perspective
+        return self
 
     def get_transform_matrix(self, img):
         if self.target_size is not None:
@@ -313,6 +360,8 @@ class RandPerspective(RandTransForm):
                                          transform_matrix[:2],
                                          dsize=(width, height),
                                          borderValue=box_info.EMPTY_INDEX)
+        if box_info.box is None or len(box_info.box) == 0:
+            return box_info
         n = len(box_info.box)
         if n:
             xy = np.ones((n * 4, 3))
@@ -339,3 +388,83 @@ class RandPerspective(RandTransForm):
             if box_info.weights is not None:
                 box_info.weights = box_info.weights[i]
             return box_info
+
+
+class Mosaic(RandTransForm):
+    def __init__(self,
+                 candidate_img_paths,
+                 candidate_labels,
+                 color_gitter=None,
+                 target_size=640,
+                 rand_center=True, **kwargs):
+        kwargs['p'] = 1.0
+        super(Mosaic, self).__init__(**kwargs)
+        self.candidate_img_paths = candidate_img_paths
+        self.candidate_labels = candidate_labels
+        if color_gitter is None:
+            color_gitter = Identity()
+        self.color_gitter = color_gitter
+        self.target_size = target_size
+        self.rand_center = rand_center
+        self.affine = RandPerspective(target_size=(target_size, target_size), translate=0.1)
+        self.scale_max = ScaleMax(max_thresh=target_size, pad_to_square=False)
+
+    def aug(self, box_info: BoxInfo) -> BoxInfo:
+        mosaic_border = (-self.target_size // 2, -self.target_size // 2)
+        if self.rand_center:
+            yc, xc = [int(random.uniform(-x, 2 * self.target_size + x)) for x in mosaic_border]
+        else:
+            yc, xc = [self.target_size, self.target_size]
+        indices = [random.randint(0, len(self.candidate_labels) - 1) for _ in range(3)]
+        img4 = np.ones(shape=(self.target_size * 2, self.target_size * 2, 3)) * box_info.EMPTY_INDEX
+        box_info4 = list()
+        for i, index in enumerate([1] + indices):
+            if i == 0:
+                box_info_i = box_info
+            else:
+                img = cv.imread(self.candidate_img_paths[index])
+                label_info = self.candidate_labels[index]
+                box_info_i = BoxInfo(img, label_info[:, 1:], label_info[:, 0], weights=np.ones_like(label_info[:, 0]))
+            box_info_i = self.color_gitter(box_info_i)
+            box_info_i = self.scale_max(box_info_i)
+            h, w = box_info_i.img.shape[:2]
+            if i == 0:
+                x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h
+            elif i == 1:  # top right
+                x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, self.target_size * 2), yc
+                x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+            elif i == 2:  # bottom left
+                x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(self.target_size * 2, yc + h)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, max(xc, w), min(y2a - y1a, h)
+            else:  # bottom right
+                x1a, y1a, x2a, y2a = xc, yc, min(xc + w, self.target_size * 2), min(self.target_size * 2, yc + h)
+                x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+            img4[y1a:y2a, x1a:x2a] = box_info_i.img[y1b:y2b, x1b:x2b]
+            padw = x1a - x1b
+            padh = y1a - y1b
+            if box_info_i.box is not None and len(box_info_i.box):
+                box_info_i.box[:, [0, 2]] = box_info_i.box[:, [0, 2]] + padw
+                box_info_i.box[:, [1, 3]] = box_info_i.box[:, [1, 3]] + padh
+                box_info4.append(box_info_i)
+        box_info.img = img4
+        if len(box_info4):
+            box_4 = np.concatenate([item.box for item in box_info4], axis=0)
+            np.clip(box_4, 0, 2 * self.target_size, out=box_4)
+            label_4 = np.concatenate([item.label for item in box_info4], axis=0)
+            weights_4 = np.concatenate([item.weights for item in box_info4], axis=0)
+            box_info.box = box_4
+            box_info.label = label_4
+            box_info.weights = weights_4
+        else:
+            box_info.box = np.zeros(shape=(0, 4), dtype=np.float32)
+            box_info.label = np.zeros(shape=(0,), dtype=np.float32)
+            box_info.weights = np.zeros(shape=(0,), dtype=np.float32)
+
+            return self.affine(box_info)
+        valid_index = np.bitwise_and((box_info.box[:, 2] - box_info.box[:, 0]) > 2,
+                                     (box_info.box[:, 3] - box_info.box[:, 1]) > 2)
+        box_info.box = box_info.box[valid_index, :]
+        box_info.label = box_info.label[valid_index]
+        box_info.weights = box_info.weights[valid_index]
+        return self.affine(box_info)
