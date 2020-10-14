@@ -13,6 +13,7 @@ class TensorList(object):
         self.weights = None
         self.masks = None
         self.extras = dict()
+        self.normalized_box_flag = False
 
     def set_tensors(self, img_list):
         tensors = list()
@@ -50,6 +51,17 @@ class TensorList(object):
             extras.append(torch.from_numpy(item).float())
         self.extras[name] = torch.stack(extras, dim=0)
 
+    def normalize_box(self):
+        if self.normalized_box_flag:
+            return self
+        assert self.tensors is not None
+        h, w = self.tensors.shape[-2:]
+        for box in self.boxes:
+            box[..., [0, 2]] = box[..., [0, 2]] / w
+            box[..., [1, 3]] = box[..., [1, 3]] / h
+        self.normalized_box_flag = True
+        return self
+
     def to(self, device):
         self.tensors = self.tensors.to(device)
         self.masks = self.masks.to(device)
@@ -59,6 +71,7 @@ class TensorList(object):
             self.labels = [item.to(device) for item in self.labels]
         if self.weights is not None:
             self.weights = [item.to(device) for item in self.weights]
+        return self
 
 
 class BatchPadding(object):
@@ -120,4 +133,5 @@ class BatchPadding(object):
         tensor_list.set_weights([item.weights for item in box_infos])
         tensor_list.set_mask([item.mask for item in box_infos])
         tensor_list.set_extra('padding_shapes', [item.extra for item in box_infos])
+        tensor_list.normalize_box()
         return tensor_list

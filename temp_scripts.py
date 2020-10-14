@@ -1,7 +1,7 @@
 import torch
 from datasets.coco import COCODataSets
 from torch.utils.data.dataloader import DataLoader
-from nets.detr import BackBone
+from nets.detr import DETR
 
 
 def demo01():
@@ -9,15 +9,17 @@ def demo01():
                            annotation_path="/home/huffman/data/annotations/instances_val2017.json",
                            use_crowd=False,
                            augments=True,
-                           debug=60
+                           debug=60,
+                           min_thresh=400,
+                           max_thresh=640
                            )
-    dataloader = DataLoader(dataset=dataset, batch_size=16, shuffle=True, num_workers=4, collate_fn=dataset.collate_fn)
+    dataloader = DataLoader(dataset=dataset, batch_size=4, shuffle=True, num_workers=4, collate_fn=dataset.collate_fn)
     device = torch.device("cuda:0")
-    # model = BackBone().to(device)
-    model = BackBone()
+    model = DETR().to(device)
     for input_tensor, path in dataloader:
-        # input_tensor.to(device)
-        model(input_tensor)
+        # print(input_tensor.boxes)
+        out = model(input_tensor.to(device))
+        # print(out)
         break
 
 
