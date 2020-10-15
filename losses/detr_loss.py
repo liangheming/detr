@@ -1,27 +1,34 @@
 import torch
 from torch import nn
-from losses.commons import BoxSimilarity, IOULoss
-from commons.boxs_utils import xyxy2xywh, xywh2xyxy
+# from losses.commons import BoxSimilarity
+from commons.boxs_utils import xyxy2xywh, xywh2xyxy, generalized_box_iou
 from scipy.optimize import linear_sum_assignment
 
-
-# import torch.nn.functional as f
+import torch.nn.functional as f
 
 
 class DETRLoss(nn.Module):
-    def __init__(self, num_cls=80, eos_coef=0.1, loss_weights_dict=None):
+    def __init__(self,
+                 num_cls=80,
+                 eos_coef=0.1,
+                 cls_loss_weights=1.0,
+                 dis_loss_weights=5.0,
+                 iou_loss_weights=2.0,
+                 cls_sim_weights=1.0,
+                 dis_sim_weights=5.0,
+                 iou_sim_weights=2.0):
         super(DETRLoss, self).__init__()
         self.num_cls = num_cls
-        self.matcher = HungarianMatcher()
-        self.iou_loss = IOULoss()
-        self.f1_loss = nn.L1Loss()
+        self.matcher = HungarianMatcher(cls_weights=cls_sim_weights,
+                                        distance_weights=dis_sim_weights,
+                                        iou_weights=iou_sim_weights)
+        self.iou_loss = generalized_box_iou
         empty_weight = torch.ones(self.num_cls + 1)
         empty_weight[-1] = eos_coef
-        self.empty_weight = nn.Parameter(empty_weight, requires_grad=False)
-        self.ce_loss = nn.CrossEntropyLoss(weight=self.empty_weight)
-        if loss_weights_dict is None:
-            loss_weights_dict = {"cls_loss": 1.0, "dis_loss": 1.0, "iou_loss": 2.0}
-        self.loss_weights_dict = loss_weights_dict
+        self.register_buffer('empty_weight', empty_weight)
+        self.loss_weights_dict = {"cls_loss": cls_loss_weights,
+                                  "dis_loss": dis_loss_weights,
+                                  "iou_loss": iou_loss_weights}
 
     def get_loss(self, outputs, targets):
         indices = self.matcher(outputs, targets)
@@ -42,11 +49,9 @@ class DETRLoss(nn.Module):
             tgt_boxes_list.append(tgt_boxes_item[j])
         pred_boxes_tensor = torch.cat(pred_boxes_list, dim=0)
         tgt_boxes_tensor = torch.cat(tgt_boxes_list, dim=0)
-        ce_loss = self.ce_loss(pred_logits.transpose(1, 2), tgt_logits_tensor)
-        distance_loss = self.f1_loss(pred_boxes_tensor, xyxy2xywh(tgt_boxes_tensor))
-        pred_boxes_tensor[..., [0, 1]] = pred_boxes_tensor[..., [0, 1]] - pred_boxes_tensor[..., [2, 3]] / 2
-        pred_boxes_tensor[..., [2, 3]] = pred_boxes_tensor[..., [0, 1]] + pred_boxes_tensor[..., [2, 3]]
-        iou_loss = self.iou_loss(pred_boxes_tensor, tgt_boxes_tensor).mean()
+        ce_loss = f.cross_entropy(pred_logits.transpose(1, 2), tgt_logits_tensor, self.empty_weight)
+        distance_loss = f.l1_loss(pred_boxes_tensor, xyxy2xywh(tgt_boxes_tensor), reduction="none").sum(-1).mean()
+        iou_loss = (1 - torch.diag(self.iou_loss(xywh2xyxy(pred_boxes_tensor), tgt_boxes_tensor))).mean()
         return {"cls_loss": ce_loss, "dis_loss": distance_loss, "iou_loss": iou_loss}
 
     def forward(self, outputs, targets):
@@ -70,12 +75,15 @@ class DETRLoss(nn.Module):
 
 
 class HungarianMatcher(object):
-    def __init__(self, cls_weights=1.0, distance_weights=1.0, iou_weights=1.0):
+    def __init__(self,
+                 cls_weights=1.0,
+                 distance_weights=5.0,
+                 iou_weights=2.0):
         super(HungarianMatcher, self).__init__()
         self.cls_weights = cls_weights
         self.distance_weights = distance_weights
         self.iou_weights = iou_weights
-        self.box_similarity = BoxSimilarity()
+        self.box_similarity = generalized_box_iou
 
     @torch.no_grad()
     def __call__(self, outputs, targets):
@@ -105,11 +113,10 @@ class HungarianMatcher(object):
                 match_idx.append(([], []))
             cls_cost = -pred_logits_item[:, tgt_labels_item.long()]
             distance_cost = torch.cdist(pred_boxes_item, xyxy2xywh(tgt_boxes_item), p=1)
-            iou_cost = -self.box_similarity(xywh2xyxy(pred_logits_item)[None], tgt_boxes_item[:, None, :])
+            iou_cost = -self.box_similarity(xywh2xyxy(pred_boxes_item), tgt_boxes_item)
             cost = self.cls_weights * cls_cost + self.distance_weights * distance_cost + self.iou_weights * iou_cost
             i, j = linear_sum_assignment(cost.cpu())
             match_idx.append((
-                # torch.full(size=(len(i),), fill_value=idx, dtype=torch.int64),
                 torch.as_tensor(i, dtype=torch.int64),
                 torch.as_tensor(j, dtype=torch.int64),
             ))

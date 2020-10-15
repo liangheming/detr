@@ -40,8 +40,8 @@ default_aug_cfg = {
     'hsv_h': 0.014,
     'hsv_s': 0.68,
     'hsv_v': 0.36,
-    'degree': (-5, 5),
-    'translate': 0.1,
+    'degree': (-10, 10),
+    'translate': 0,
     'shear': 0.0,
     'beta': (8, 8),
 }
@@ -105,7 +105,7 @@ class COCODataSets(Dataset):
             self.labels = self.labels[:debug]
         self.transform = None
         self.set_transform()
-        self.batch_transform = BatchPadding(center_padding=True)
+        self.batch_transform = BatchPadding(center_padding=False)
 
     def __load_data(self):
         index = 0
@@ -203,23 +203,23 @@ class COCODataSets(Dataset):
                 RandPerspective(target_size=None,
                                 degree=self.aug_cfg['degree'],
                                 shear=self.aug_cfg['shear'],
-                                translate=self.aug_cfg['translate'])
+                                translate=self.aug_cfg['translate']).reset(p=0.5)
             ])
 
             self.transform = Compose(
                 transforms=[
                     OneOf(
                         transforms=[
-                            (0.2, basic),
-                            (0.5, mosaic),
-                            (0.3, mix_up)
+                            (1.0, basic),
+                            (0.0, mosaic),
+                            (0.0, mix_up)
                         ]
                     ),
                     LRFlip(p=0.5)
                 ]
             )
         else:
-            self.transform = ScaleMinMax(min_thresh=self.min_thresh, max_thresh=self.max_thresh)
+            self.transform = ScaleMinMax(min_thresh=800, max_thresh=self.max_thresh)
 
 
 if __name__ == '__main__':

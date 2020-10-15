@@ -14,11 +14,19 @@ def demo01():
                            max_thresh=640
                            )
     dataloader = DataLoader(dataset=dataset, batch_size=4, shuffle=True, num_workers=4, collate_fn=dataset.collate_fn)
-    device = torch.device("cuda:0")
-    model = DETR().to(device)
+    # device = torch.device("cuda:0")
+    model = DETR().eval()
+    # param_dicts = [
+    #     {"params": [p for n, p in model.named_parameters() if "backbone" not in n and p.requires_grad]},
+    #     {
+    #         "params": [p for n, p in model.named_parameters() if "backbone" in n and p.requires_grad],
+    #         "lr": 0.00001,
+    #     },
+    # ]
+    # optimizer = torch.optim.AdamW(param_dicts, lr=0.01,
+    #                               weight_decay=0.0001)
     for input_tensor, path in dataloader:
-        # print(input_tensor.boxes)
-        out = model(input_tensor.to(device))
+        out = model(input_tensor)
         # print(out)
         break
 

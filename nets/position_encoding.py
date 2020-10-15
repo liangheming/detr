@@ -16,10 +16,15 @@ class PositionEmbeddingSine(nn.Module):
             scale = 2 * math.pi
         self.scale = scale
 
-    def forward(self, x):
-        b, c, ny, nx = x.shape
-        yv, xv = torch.meshgrid([torch.arange(ny), torch.arange(nx)])
-        y_embed, x_embed = yv.type_as(x).to(x.device).unsqueeze(0), xv.type_as(x).to(x.device).unsqueeze(0)
+    def forward(self, x, mask=None):
+        if mask is None:
+            b, c, ny, nx = x.shape
+            yv, xv = torch.meshgrid([torch.arange(ny), torch.arange(nx)])
+            y_embed, x_embed = yv.type_as(x).to(x.device).unsqueeze(0), xv.type_as(x).to(x.device).unsqueeze(0)
+        else:
+            not_mask = ~mask
+            y_embed = not_mask.cumsum(1, dtype=x.dtype)
+            x_embed = not_mask.cumsum(2, dtype=x.dtype)
         if self.normalize:
             eps = 1e-6
             y_embed = y_embed / (y_embed[:, -1:, :] + eps) * self.scale
@@ -30,7 +35,9 @@ class PositionEmbeddingSine(nn.Module):
         pos_y = y_embed[:, :, :, None] / dim_t
         pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).flatten(3)
         pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3)
-        pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2).repeat(x.shape[0], 1, 1, 1)
+        pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
+        if mask is None:
+            return pos.repeat(x.shape[0], 1, 1, 1)
         return pos
 
 

@@ -14,6 +14,7 @@ class TensorList(object):
         self.masks = None
         self.extras = dict()
         self.normalized_box_flag = False
+        self.batch_shape = None
 
     def set_tensors(self, img_list):
         tensors = list()
@@ -55,11 +56,22 @@ class TensorList(object):
         if self.normalized_box_flag:
             return self
         assert self.tensors is not None
-        h, w = self.tensors.shape[-2:]
+        w, h = self.batch_shape
         for box in self.boxes:
             box[..., [0, 2]] = box[..., [0, 2]] / w
             box[..., [1, 3]] = box[..., [1, 3]] / h
         self.normalized_box_flag = True
+        return self
+
+    def un_normalize_box(self):
+        if not self.normalized_box_flag:
+            return self
+        assert self.tensors is not None
+        w, h = self.batch_shape
+        for box in self.boxes:
+            box[..., [0, 2]] = box[..., [0, 2]] * w
+            box[..., [1, 3]] = box[..., [1, 3]] * h
+        self.normalized_box_flag = False
         return self
 
     def to(self, device):
@@ -113,13 +125,18 @@ class BatchPadding(object):
             if box_info.box is not None and len(box_info.box):
                 box_info.box[:, [0, 2]] = box_info.box[:, [0, 2]] + left
                 box_info.box[:, [1, 3]] = box_info.box[:, [1, 3]] + top
-
+            mask = np.ones(shape=(max_h, max_w)).astype(np.bool)
+            mask[top:top + h, left:left + w] = False
+            box_info.mask = mask
+            # draw_img
             # box_info.img = ret_img
             # from datasets.coco import colors, coco_names
             # ret_img = box_info.draw_box(colors, coco_names)
             # import uuid
-            # cv.imwrite("{:s}.jpg".format(str(uuid.uuid4()).replace('-', "")), ret_img)
-            box_info.mask = ret_img[..., 0] != BoxInfo.EMPTY_INDEX
+            # name = str(uuid.uuid4()).replace('-', "")
+            # cv.imwrite("{:s}.jpg".format(name), ret_img)
+            # cv.imwrite("{:s}_mask.jpg".format(name), box_info.mask.astype(np.uint8)*255)
+            # draw_img
             zero_mask = ret_img == BoxInfo.EMPTY_INDEX
             ret_img = ((ret_img[..., ::-1] / 255.0) - np.array(self.rgb_mean)) / np.array(self.rgb_std)
             ret_img[zero_mask] = 0.
@@ -127,6 +144,7 @@ class BatchPadding(object):
             box_info.extra = np.array([left, top, w, h])
 
         tensor_list = TensorList()
+        tensor_list.batch_shape = (max_w, max_h)
         tensor_list.set_tensors([item.img for item in box_infos])
         tensor_list.set_boxes([item.box for item in box_infos])
         tensor_list.set_labels([item.label for item in box_infos])
