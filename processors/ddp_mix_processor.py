@@ -116,7 +116,7 @@ class DDPMixProcessor(object):
             self.scaler.step(self.optimizer)
             self.scaler.update()
             self.ema.update(self.model)
-            loss_list[0].append(loss.item()/6)
+            loss_list[0].append(loss.item())
             loss_list[1].append(cls_loss.item()/6)
             loss_list[2].append(dis_loss.item()/6)
             loss_list[3].append(iou_loss.item()/6)

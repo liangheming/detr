@@ -111,6 +111,7 @@ class HungarianMatcher(object):
             tgt_labels_item, tgt_boxes_item = tgt_item['labels'], tgt_item['boxes']
             if len(tgt_boxes_item) == 0:
                 match_idx.append(([], []))
+                continue
             cls_cost = -pred_logits_item[:, tgt_labels_item.long()]
             distance_cost = torch.cdist(pred_boxes_item, xyxy2xywh(tgt_boxes_item), p=1)
             iou_cost = -self.box_similarity(xywh2xyxy(pred_boxes_item), tgt_boxes_item)

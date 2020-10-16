@@ -1,10 +1,10 @@
 model_name: detr
 data:
-#  train_annotation_path: /home/huffman/data/annotations/instances_train2017.json
-  train_annotation_path: /home/huffman/data/annotations/instances_val2017.json
+  train_annotation_path: /home/huffman/data/annotations/instances_train2017.json
+#  train_annotation_path: /home/huffman/data/annotations/instances_val2017.json
   val_annotation_path: /home/huffman/data/annotations/instances_val2017.json
-#  train_img_root: /home/huffman/data/train2017
-  train_img_root: /home/huffman/data/val2017
+  train_img_root: /home/huffman/data/train2017
+#  train_img_root: /home/huffman/data/val2017
   val_img_root: /home/huffman/data/val2017
   min_thresh: 640
   max_thresh: 1024
@@ -19,8 +19,8 @@ model:
   backbone: resnet50
 
 optim:
-  backbone_lr: 0.00001
-  lr: 0.0001
+  backbone_lr: 0.00002
+  lr: 0.0002
   weight_decay: 0.0001
   epochs: 300
   decay_steps: 200
@@ -28,4 +28,4 @@ optim:
 val:
   interval: 1
   weight_path: weights
-gpus: 5,6,7,8
+gpus: 0,1,2,3,4,5,6,7
